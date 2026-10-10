@@ -1,3 +1,10 @@
+// TODO list:
+// 1. add ioctl, nmap and poll libraries, read about it
+// 2. add framebuffer
+// 3. implement pickColor returning 1 of 3 random values
+// 4. add event handling of joystick
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -16,11 +23,30 @@
 #define TILE_ADDED (1 << 2)
 #define PAUSED (1 << 3)
 
+#define FB_PATH "dev/fb0"
+#define JS_PATH "dev/input/event0"
+#define FILE_SIZE 64 * sizeof(uint16_t)
+
+#define BLANK 0x000000
+#define BLUE 0x0000FF
+#define RED 0xFF0000
+#define GREEN 0x00FF00
+
+int colorPicker = 0;
+typedef enum
+{
+    BLUE = 0,
+    RED = 1,
+    GREEN = 2,
+
+} colors;
+
 // If you extend this structure, either avoid pointers or adjust
 // the game logic allocate/deallocate and reset the memory
 typedef struct
 {
     bool occupied;
+    int color;
 } tile;
 
 typedef struct
@@ -98,6 +124,7 @@ void renderSenseHatMatrix(bool const playfieldChanged)
 static inline void newTile(coord const target)
 {
     game.playfield[target.y][target.x].occupied = true;
+    game.playfield[target.y][target.x].color = pickColor();
 }
 
 static inline void copyTile(coord const to, coord const from)
