@@ -10,11 +10,20 @@
 #include <unistd.h>
 #include <termios.h>
 #include <sys/select.h>
+
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+
 #include <linux/input.h>
+#include <linux/fb.h>
 #include <stdbool.h>
 #include <string.h>
 #include <time.h>
 #include <poll.h>
+
+#include <stdint.h>
+#include <fcntl.h>
 
 // The game state can be used to detect what happens on the playfield
 #define GAMEOVER 0
@@ -23,23 +32,17 @@
 #define TILE_ADDED (1 << 2)
 #define PAUSED (1 << 3)
 
-#define FB_PATH "dev/fb0"
-#define JS_PATH "dev/input/event0"
+#define FB_PATH "/dev/fb0"
+#define JS_PATH "/dev/input/event4"
 #define FILE_SIZE 64 * sizeof(uint16_t)
 
-#define BLANK 0x000000
-#define BLUE 0x0000FF
-#define RED 0xFF0000
-#define GREEN 0x00FF00
+#define BLANK 0x0000
+#define BLUE 0x001F
+#define RED 0xF800
+#define GREEN 0x07E0
 
 int colorPicker = 0;
-typedef enum
-{
-    BLUE = 0,
-    RED = 1,
-    GREEN = 2,
-
-} colors;
+const int colors[3] = {BLUE, RED, GREEN};
 
 // If you extend this structure, either avoid pointers or adjust
 // the game logic allocate/deallocate and reset the memory
@@ -85,11 +88,47 @@ gameConfig game = {
     .initNextGameTick = 50,
 };
 
+struct fb_fix_screeninfo fb_info;
+uint16_t *fb_map;
+int fb_fd;
+
+struct input_event event;
+int js_fd;
+
 // This function is called on the start of your application
 // Here you can initialize what ever you need for your task
 // return false if something fails, else true
 bool initializeSenseHat()
 {
+    // check opening framebuffer, opening input event
+    // check map file
+    fb_fd = open(FB_PATH, O_RDWR); // opens framebuffer as read/write
+    js_fd = open(JS_PATH, O_RDONLY | O_NONBLOCK); // opens events as read only
+
+    if (fb_fd == -1)
+    {
+        printf("Failed to open framebuffer. \n");
+        return false;
+    }
+
+    if (js_fd == -1)
+    {
+        printf("Failed to open input event \n");
+        return false;
+    }
+
+    if (ioctl(fb_fd, FBIOGET_FSCREENINFO, &fb_info) == -1) {
+        printf("Failed to call ioctl \n");
+        close(fb_fd);
+        return false;
+    }
+
+    fb_map = mmap(NULL, FILE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd, 0);
+    if (fb_map == MAP_FAILED) {
+        close(fb_fd);
+        printf("Failed to map file \n");
+        return false;
+    }
     return true;
 }
 
@@ -97,6 +136,9 @@ bool initializeSenseHat()
 // Here you can free up everything that you might have opened/allocated
 void freeSenseHat()
 {
+    memset(fb_map, 0, FILE_SIZE);
+    close(fb_fd);
+    close(js_fd);
 }
 
 // This function should return the key that corresponds to the joystick press
@@ -106,15 +148,25 @@ void freeSenseHat()
 // !!! when nothing was pressed you MUST return 0 !!!
 int readSenseHatJoystick()
 {
+    if (read(js_fd, &event, sizeof(event)) != -1 && event.type == EV_KEY && event.value == 0)
+    {
+    return event.code;
+    }
     return 0;
 }
 
 // This function should render the gamefield on the LED matrix. It is called
 // every game tick. The parameter playfieldChanged signals whether the game logic
 // has changed the playfield
-void renderSenseHatMatrix(bool const playfieldChanged)
+int pickColor()
 {
-    (void)playfieldChanged;
+    colorPicker = (colorPicker + 1) % 3;
+    return colors[colorPicker];
+}
+
+static inline int getColorFromTile(coord const target)
+{
+    return game.playfield[target.y][target.x].color;
 }
 
 // The game logic uses only the following functions to interact with the playfield.
@@ -126,6 +178,7 @@ static inline void newTile(coord const target)
     game.playfield[target.y][target.x].occupied = true;
     game.playfield[target.y][target.x].color = pickColor();
 }
+
 
 static inline void copyTile(coord const to, coord const from)
 {
@@ -171,6 +224,24 @@ static inline void resetPlayfield()
     {
         resetRow(y);
     }
+}
+
+void renderSenseHatMatrix(bool const playfieldChanged)
+{
+    if (playfieldChanged)
+    {
+        for (uint16_t x = 0; x < game.grid.x; x++)
+        {
+            for (uint16_t y = 0; y < game.grid.y; y++)
+            {
+                coord const tile = {x,y};
+                // add rendering of block here
+                *(fb_map + tile.x + tile.y * 8) = tileOccupied(tile) ? getColorFromTile(tile) : BLANK;
+            }
+        }
+    }
+    return;
+
 }
 
 // Below here comes the game logic. Keep in mind: You are not allowed to change how the game works!
@@ -504,6 +575,7 @@ int main(int argc, char **argv)
         gettimeofday(&sTv, NULL);
 
         int key = readSenseHatJoystick();
+        printf("%d", key);
         if (!key)
         {
             // NOTE: Uncomment the next line if you want to test your implementation with
