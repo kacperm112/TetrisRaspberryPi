@@ -1,9 +1,5 @@
-// TODO list:
-// 1. add ioctl, nmap and poll libraries, read about it
-// 2. add framebuffer
-// 3. implement pickColor returning 1 of 3 random values
-// 4. add event handling of joystick
-
+// @author: Kacper Maciejko
+// Lab 3 in course TDT4258-26H
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,6 +42,7 @@ const int colors[3] = {BLUE, RED, GREEN};
 
 // If you extend this structure, either avoid pointers or adjust
 // the game logic allocate/deallocate and reset the memory
+// added color to the structure
 typedef struct
 {
     bool occupied;
@@ -88,11 +85,13 @@ gameConfig game = {
     .initNextGameTick = 50,
 };
 
+// framebuffer and event handler structures
 struct fb_fix_screeninfo fb_info;
 uint16_t *fb_map;
 int fb_fd;
 
 struct input_event event;
+char js_name[256] = "Unknown";
 int js_fd;
 
 // This function is called on the start of your application
@@ -114,18 +113,47 @@ bool initializeSenseHat()
     if (js_fd == -1)
     {
         printf("Failed to open input event \n");
+        close(fb_fd);
         return false;
     }
+
+    // Checking identification of RPi-Sense FB
 
     if (ioctl(fb_fd, FBIOGET_FSCREENINFO, &fb_info) == -1) {
         printf("Failed to call ioctl \n");
         close(fb_fd);
+        close(js_fd);
+        return false;
+    }
+
+    if (strcmp(fb_info.id, "RPi-Sense FB") != 0)
+    {
+        printf("Failed to open the RPi-Sense FB. Got: %s\n", fb_info.id);
+        close(fb_fd);
+        close(js_fd);
+        return false;
+    }
+
+    // Checking identification of Raspberry Pi Sense HAT Joystick
+    if (ioctl(js_fd, EVIOCGNAME(sizeof(js_name)), js_name) == -1) {
+        printf("Failed to call ioctl \n");
+        close(fb_fd);
+        close(js_fd);
+        return false;
+    }
+
+    if (strcmp(js_name, "Raspberry Pi Sense HAT Joystick") != 0)
+    {
+        printf("Failed to open the Raspberry Pi Sense HAT Joystick. Got: %s\n", js_name);
+        close(fb_fd);
+        close(js_fd);
         return false;
     }
 
     fb_map = mmap(NULL, FILE_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd, 0);
     if (fb_map == MAP_FAILED) {
         close(fb_fd);
+        close(js_fd);
         printf("Failed to map file \n");
         return false;
     }
@@ -137,6 +165,7 @@ bool initializeSenseHat()
 void freeSenseHat()
 {
     memset(fb_map, 0, FILE_SIZE);
+    munmap(fb_map, FILE_SIZE);
     close(fb_fd);
     close(js_fd);
 }
@@ -148,6 +177,7 @@ void freeSenseHat()
 // !!! when nothing was pressed you MUST return 0 !!!
 int readSenseHatJoystick()
 {
+    // function returns event code upon joystick release
     if (read(js_fd, &event, sizeof(event)) != -1 && event.type == EV_KEY && event.value == 0)
     {
     return event.code;
@@ -155,9 +185,8 @@ int readSenseHatJoystick()
     return 0;
 }
 
-// This function should render the gamefield on the LED matrix. It is called
-// every game tick. The parameter playfieldChanged signals whether the game logic
-// has changed the playfield
+// functions handling alternating colors of tiles
+
 int pickColor()
 {
     colorPicker = (colorPicker + 1) % 3;
@@ -225,6 +254,10 @@ static inline void resetPlayfield()
         resetRow(y);
     }
 }
+
+// This function should render the gamefield on the LED matrix. It is called
+// every game tick. The parameter playfieldChanged signals whether the game logic
+// has changed the playfield
 
 void renderSenseHatMatrix(bool const playfieldChanged)
 {
@@ -532,6 +565,11 @@ int main(int argc, char **argv)
     // This sets the stdin in a special state where each
     // keyboard press is directly flushed to the stdin and additionally
     // not outputted to the stdout
+
+    // saves the command line original state so keyboard presses are not flushed after exit
+    struct termios ttystate, original_ttystate;
+    tcgetattr(STDIN_FILENO, &original_ttystate);
+
     {
         struct termios ttystate;
         tcgetattr(STDIN_FILENO, &ttystate);
@@ -546,6 +584,7 @@ int main(int argc, char **argv)
     if (!game.playfield || !game.rawPlayfield)
     {
         fprintf(stderr, "ERROR: could not allocate playfield\n");
+        tcsetattr(STDIN_FILENO, TCSANOW, &original_ttystate);
         return 1;
     }
     for (unsigned int y = 0; y < game.grid.y; y++)
@@ -561,6 +600,7 @@ int main(int argc, char **argv)
     if (!initializeSenseHat())
     {
         fprintf(stderr, "ERROR: could not initilize sense hat\n");
+        tcsetattr(STDIN_FILENO, TCSANOW, &original_ttystate);
         return 1;
     };
 
@@ -604,5 +644,6 @@ int main(int argc, char **argv)
     free(game.playfield);
     free(game.rawPlayfield);
 
+    tcsetattr(STDIN_FILENO, TCSANOW, &original_ttystate);
     return 0;
 }
