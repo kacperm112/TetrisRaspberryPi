@@ -177,12 +177,17 @@ void freeSenseHat()
 // !!! when nothing was pressed you MUST return 0 !!!
 int readSenseHatJoystick()
 {
-    // function returns event code upon joystick release
-    if (read(js_fd, &event, sizeof(event)) != -1 && event.type == EV_KEY && event.value == 0)
+    int latest_key = 0;
+    struct input_event ev;
+    while (read(js_fd, &ev, sizeof(ev)) != -1)
     {
-    return event.code;
+        if (ev.type == EV_KEY && ev.value > 0)
+        {
+            latest_key = ev.code;
+        }
     }
-    return 0;
+
+    return latest_key;
 }
 
 // functions handling alternating colors of tiles
