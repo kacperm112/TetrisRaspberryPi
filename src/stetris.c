@@ -575,7 +575,6 @@ int main(int argc, char **argv)
         gettimeofday(&sTv, NULL);
 
         int key = readSenseHatJoystick();
-        printf("%d", key);
         if (!key)
         {
             // NOTE: Uncomment the next line if you want to test your implementation with
